@@ -81,6 +81,7 @@ module.exports = class WireGuard {
       // await Util.exec('iptables -A FORWARD -i wg0 -j ACCEPT');
       // await Util.exec('iptables -A FORWARD -o wg0 -j ACCEPT');
       await this.__syncConfig();
+      this.startExpiryChecker();
     }
 
     return this.__configPromise;
@@ -152,6 +153,7 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
       latestHandshakeAt: null,
       transferRx: null,
       transferTx: null,
+      expiresAt: client.expiresAt ? new Date(client.expiresAt) : null,
     }));
 
     // Loop WireGuard status
@@ -225,9 +227,18 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     });
   }
 
-  async createClient({ name }) {
+  async createClient({ name, expiresAt = null }) {
     if (!name) {
       throw new Error('Missing: Name');
+    }
+
+    // Validate expiresAt if provided
+    if (expiresAt !== null) {
+      const expDate = new Date(expiresAt);
+      if (Number.isNaN(expDate.getTime())) {
+        throw new Error('Invalid expiresAt date');
+      }
+      expiresAt = expDate.toISOString();
     }
 
     const config = await this.getConfig();
@@ -269,6 +280,7 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
       updatedAt: new Date(),
 
       enabled: true,
+      expiresAt,
     };
 
     config.clients[id] = client;
@@ -276,6 +288,60 @@ Endpoint = ${WG_HOST}:${WG_CONFIG_PORT}`;
     await this.saveConfig();
 
     return client;
+  }
+
+  async updateClientExpiry({ clientId, expiresAt }) {
+    const client = await this.getClient({ clientId });
+
+    if (expiresAt === null || expiresAt === '') {
+      client.expiresAt = null;
+    } else {
+      const expDate = new Date(expiresAt);
+      if (Number.isNaN(expDate.getTime())) {
+        throw new Error('Invalid expiresAt date');
+      }
+      client.expiresAt = expDate.toISOString();
+      // Автовключаем если был отключён по истечению
+      client.enabled = true;
+    }
+
+    client.updatedAt = new Date();
+    await this.saveConfig();
+  }
+
+  startExpiryChecker() {
+    const CHECK_INTERVAL_MS = 60 * 1000; // каждую минуту
+
+    const check = async () => {
+      try {
+        const config = await this.getConfig();
+        const now = new Date();
+        let changed = false;
+
+        for (const [clientId, client] of Object.entries(config.clients)) {
+          if (!client.expiresAt) continue;
+          if (!client.enabled) continue;
+
+          const expDate = new Date(client.expiresAt);
+          if (expDate <= now) {
+            debug(`Client expired, disabling: ${client.name} (${clientId})`);
+            client.enabled = false;
+            client.updatedAt = new Date();
+            changed = true;
+          }
+        }
+
+        if (changed) {
+          await this.saveConfig();
+        }
+      } catch (err) {
+        debug(`Expiry checker error: ${err.message}`);
+      }
+    };
+
+    // Первая проверка через минуту после старта
+    setInterval(check, CHECK_INTERVAL_MS);
+    debug('Expiry checker started.');
   }
 
   async deleteClient({ clientId }) {

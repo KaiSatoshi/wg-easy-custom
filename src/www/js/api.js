@@ -90,14 +90,15 @@ class API {
       latestHandshakeAt: client.latestHandshakeAt !== null
         ? new Date(client.latestHandshakeAt)
         : null,
+      expiresAt: client.expiresAt ? new Date(client.expiresAt) : null,
     })));
   }
 
-  async createClient({ name }) {
+  async createClient({ name, expiresAt = null }) {
     return this.call({
       method: 'post',
       path: '/wireguard/client',
-      body: { name },
+      body: { name, expiresAt },
     });
   }
 
@@ -135,6 +136,14 @@ class API {
       method: 'put',
       path: `/wireguard/client/${clientId}/address/`,
       body: { address },
+    });
+  }
+
+  async updateClientExpiry({ clientId, expiresAt }) {
+    return this.call({
+      method: 'put',
+      path: `/wireguard/client/${clientId}/expiry`,
+      body: { expiresAt },
     });
   }
 

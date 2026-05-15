@@ -59,10 +59,18 @@ new Vue({
     clientDelete: null,
     clientCreate: null,
     clientCreateName: '',
+    clientCreateDays: '',
+    clientCreateHours: '',
+    clientCreateMinutes: '',
     clientEditName: null,
     clientEditNameId: null,
     clientEditAddress: null,
     clientEditAddressId: null,
+    clientEditExpiry: null,
+    clientEditExpiryId: null,
+    clientEditDays: '',
+    clientEditHours: '',
+    clientEditMinutes: '',
     qrcode: null,
 
     currentRelease: null,
@@ -270,9 +278,46 @@ new Vue({
       const name = this.clientCreateName;
       if (!name) return;
 
-      this.api.createClient({ name })
+      let expiresAt = null;
+      const days = parseInt(this.clientCreateDays, 10) || 0;
+      const hours = parseInt(this.clientCreateHours, 10) || 0;
+      const minutes = parseInt(this.clientCreateMinutes, 10) || 0;
+      const totalMs = (days * 24 * 60 + hours * 60 + minutes) * 60000;
+      if (totalMs > 0) {
+        expiresAt = new Date(Date.now() + totalMs).toISOString();
+      }
+
+      this.api.createClient({ name, expiresAt })
+        .catch((err) => alert(err.message || err.toString()))
+        .finally(() => {
+          this.clientCreateName = '';
+          this.clientCreateDays = '';
+          this.clientCreateHours = '';
+          this.clientCreateMinutes = '';
+          this.refresh().catch(console.error);
+        });
+    },
+    updateClientExpiry(client, expiresAtISO) {
+      this.api.updateClientExpiry({ clientId: client.id, expiresAt: expiresAtISO || null })
         .catch((err) => alert(err.message || err.toString()))
         .finally(() => this.refresh().catch(console.error));
+    },
+    applyClientExpiry(client) {
+      const days = parseInt(this.clientEditDays, 10) || 0;
+      const hours = parseInt(this.clientEditHours, 10) || 0;
+      const minutes = parseInt(this.clientEditMinutes, 10) || 0;
+      const totalMs = (days * 24 * 60 + hours * 60 + minutes) * 60000;
+
+      let expiresAt = null;
+      if (totalMs > 0) {
+        expiresAt = new Date(Date.now() + totalMs).toISOString();
+      }
+
+      this.updateClientExpiry(client, expiresAt);
+      this.clientEditExpiryId = null;
+      this.clientEditDays = '';
+      this.clientEditHours = '';
+      this.clientEditMinutes = '';
     },
     deleteClient(client) {
       this.api.deleteClient({ clientId: client.id })
@@ -280,12 +325,24 @@ new Vue({
         .finally(() => this.refresh().catch(console.error));
     },
     enableClient(client) {
+      // Если клиент истёк и его включают вручную — делаем бессрочным
+      if (client.expiresAt && new Date(client.expiresAt) <= new Date()) {
+        this.api.updateClientExpiry({ clientId: client.id, expiresAt: null })
+          .catch((err) => alert(err.message || err.toString()));
+      }
       this.api.enableClient({ clientId: client.id })
         .catch((err) => alert(err.message || err.toString()))
         .finally(() => this.refresh().catch(console.error));
     },
     disableClient(client) {
       this.api.disableClient({ clientId: client.id })
+        .catch((err) => alert(err.message || err.toString()))
+        .finally(() => this.refresh().catch(console.error));
+    },
+    // Сбросить время — expiresAt = null + выключить тумблер (аннулировать)
+    resetClientExpiry(client) {
+      this.api.updateClientExpiry({ clientId: client.id, expiresAt: null })
+        .then(() => this.api.disableClient({ clientId: client.id }))
         .catch((err) => alert(err.message || err.toString()))
         .finally(() => this.refresh().catch(console.error));
     },
@@ -341,6 +398,26 @@ new Vue({
     bytes,
     timeago: (value) => {
       return timeago.format(value, i18n.locale);
+    },
+    expiryLabel: (value) => {
+      if (!value) return '∞';
+      const now = new Date();
+      const exp = new Date(value);
+      const diffMs = exp - now;
+      if (diffMs <= 0) return '⛔ ' + i18n.t('expiryExpired', i18n.locale) || '⛔ Истёк';
+      const d = i18n.t('expiryDays');
+      const h = i18n.t('expiryHours');
+      const m = i18n.t('expiryMinutes');
+      const diffMin = Math.floor(diffMs / 60000);
+      if (diffMin < 60) return `⏳ ${diffMin} ${m}`;
+      const diffHours = Math.floor(diffMin / 60);
+      if (diffHours < 24) {
+        const remMin = diffMin % 60;
+        return remMin > 0 ? `⏳ ${diffHours} ${h} ${remMin} ${m}` : `⏳ ${diffHours} ${h}`;
+      }
+      const diffDays = Math.floor(diffHours / 24);
+      const remHours = diffHours % 24;
+      return remHours > 0 ? `⏳ ${diffDays} ${d} ${remHours} ${h}` : `⏳ ${diffDays} ${d}`;
     },
   },
   mounted() {
